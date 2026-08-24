@@ -1,5 +1,5 @@
 fastapi
-uvicorn[standard]
-ytmusicapi
-yt-dlp
+uvicorn
 requests
+ytmusicapi
+yt-dlp>=2024.08.01
