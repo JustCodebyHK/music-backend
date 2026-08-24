@@ -80,3 +80,7 @@ def download_audio(video_id: str):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
+
+@app.get("/")
+def read_root():
+    return {"status": "Backend is running"}    
