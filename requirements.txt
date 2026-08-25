@@ -2,4 +2,4 @@ fastapi
 uvicorn
 requests
 ytmusicapi
-yt-dlp>=2024.08.01
+git+https://github.com/yt-dlp/yt-dlp.git

@@ -10,18 +10,18 @@ ytm = YTMusic()
 
 def get_yt_dlp_options():
     return {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'format': 'bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Attempt multiple client types to bypass cloud hosting IP blocks
+        # 'tv_embedded' and 'ios' clients bypass YouTube's datacenter IP block
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_vr', 'android', 'ios', 'mweb', 'web']
+                'player_client': ['tv_embedded', 'ios', 'android']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Android 14; Mobile; rv:124.0) Gecko/124.0 Firefox/124.0',
+            'User-Agent': 'Mozilla/5.0 (SmartTV; SmartTV; AppleTV6,2/11.1) AppleWebKit/605.1.15',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
