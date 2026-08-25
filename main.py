@@ -15,15 +15,13 @@ def get_yt_dlp_options():
         'no_warnings': True,
         'noplaylist': True,
         'js_runtimes': {'deno': {}},
-        # Target tv_embedded with oauth2 plugin argument to trigger Google device auth code
-        'username': 'oauth2',
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'android_music', 'ios']
+                'player_client': ['android', 'ios', 'mweb']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (SmartTV; SmartTV; AppleTV6,2/11.1) AppleWebKit/605.1.15',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
