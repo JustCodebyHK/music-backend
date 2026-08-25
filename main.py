@@ -14,8 +14,8 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'js_runtimes': ['deno'],
-        # Enable OAuth to authenticate client requests on datacenter IPs
+        # Correct dictionary syntax for JS runtime configuration
+        'js_runtimes': {'deno': {}},
         'username': 'oauth2',
         'password': '',
         'extractor_args': {
