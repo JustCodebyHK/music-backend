@@ -14,15 +14,17 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Force YouTube Music's native Android client payload
+        'js_runtimes': ['deno'],
+        # Enable OAuth to authenticate client requests on datacenter IPs
+        'username': 'oauth2',
+        'password': '',
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_music', 'android'],
-                'player_skip': ['webpage', 'configs', 'js']
+                'player_client': ['android_music', 'android', 'mweb']
             }
         },
         'http_headers': {
-            'User-Agent': 'com.google.android.apps.youtube.music/6.41.52 (Linux; U; Android 14; en_US)',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
