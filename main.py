@@ -14,17 +14,15 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Correct dictionary syntax for JS runtime configuration
         'js_runtimes': {'deno': {}},
-        'username': 'oauth2',
-        'password': '',
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_music', 'android', 'mweb']
+                'player_client': ['ios', 'android_music', 'mweb'],
+                'player_skip': ['webpage']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X; en_US)',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
