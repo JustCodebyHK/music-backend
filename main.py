@@ -10,18 +10,19 @@ ytm = YTMusic()
 
 def get_yt_dlp_options():
     return {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # 'tv_embedded' and 'ios' clients bypass YouTube's datacenter IP block
+        # Force YouTube Music's native Android client payload
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'ios', 'android']
+                'player_client': ['android_music', 'android'],
+                'player_skip': ['webpage', 'configs', 'js']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (SmartTV; SmartTV; AppleTV6,2/11.1) AppleWebKit/605.1.15',
+            'User-Agent': 'com.google.android.apps.youtube.music/6.41.52 (Linux; U; Android 14; en_US)',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
