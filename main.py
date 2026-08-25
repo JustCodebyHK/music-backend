@@ -8,20 +8,27 @@ from ytmusicapi import YTMusic
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
 
-# Helper function to get unified yt-dlp options that bypass IP blocks
 def get_yt_dlp_options():
     return {
         'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Force yt-dlp to use mobile/tv clients to bypass data-center IP bans on cloud providers (Render)
+        # Attempt multiple client types to bypass cloud hosting IP blocks
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'tv', 'web']
+                'player_client': ['android_vr', 'android', 'ios', 'mweb', 'web']
             }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Android 14; Mobile; rv:124.0) Gecko/124.0 Firefox/124.0',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+
+@app.get("/")
+def read_root():
+    return {"status": "Backend service is live"}
 
 @app.get("/api/search")
 def search_music(q: str = Query(..., description="Search query")):
@@ -66,11 +73,7 @@ def download_audio(video_id: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             stream_url = info.get("url")
-            
-            # Pass custom user agent to prevent YouTube 403 Forbidden errors when proxying the audio download
-            headers = info.get("http_headers", {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
+            headers = info.get("http_headers", {})
 
         req = requests.get(stream_url, headers=headers, stream=True)
         return StreamingResponse(
@@ -80,7 +83,3 @@ def download_audio(video_id: str):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
-
-@app.get("/")
-def read_root():
-    return {"status": "Backend is running"}    
