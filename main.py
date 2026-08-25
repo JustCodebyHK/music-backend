@@ -8,8 +8,11 @@ from ytmusicapi import YTMusic
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
 
+# Path to your Netscape cookies file
+COOKIE_FILE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
+
 def get_yt_dlp_options():
-    return {
+    opts = {
         'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'quiet': True,
         'no_warnings': True,
@@ -25,6 +28,12 @@ def get_yt_dlp_options():
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+    
+    # Attach cookies file if it exists
+    if os.path.exists(COOKIE_FILE_PATH):
+        opts['cookiefile'] = COOKIE_FILE_PATH
+
+    return opts
 
 @app.get("/")
 def read_root():
