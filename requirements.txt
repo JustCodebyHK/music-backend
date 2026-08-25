@@ -2,4 +2,4 @@ fastapi
 uvicorn
 requests
 ytmusicapi
-yt-dlp-nightly
+git+https://github.com/yt-dlp/yt-dlp.git
