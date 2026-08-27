@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import requests
 import yt_dlp
 import redis
@@ -28,13 +29,20 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Dynamic Cookie File Path: Render Secret Path vs Local Directory
+# Paths for cookie resolution
 RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
+WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"
 LOCAL_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
 def get_cookie_path():
+    """Copy secrets to /tmp so yt-dlp gets write access on Render."""
     if os.path.exists(RENDER_SECRET_COOKIE_PATH):
-        return RENDER_SECRET_COOKIE_PATH
+        try:
+            shutil.copyfile(RENDER_SECRET_COOKIE_PATH, WRITABLE_COOKIE_PATH)
+            return WRITABLE_COOKIE_PATH
+        except Exception as e:
+            print(f"Error copying secret cookies file: {e}")
+            return RENDER_SECRET_COOKIE_PATH
     elif os.path.exists(LOCAL_COOKIE_PATH):
         return LOCAL_COOKIE_PATH
     return None
@@ -45,7 +53,6 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'cookiefile_prune': False,  # Prevents yt-dlp from trying to write to read-only cookies.txt
         'extractor_args': {
             'youtube': {
                 'player_client': ['ios', 'android', 'web', 'mweb']
