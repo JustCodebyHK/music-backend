@@ -49,15 +49,10 @@ def get_cookie_path():
 
 def get_yt_dlp_options():
     opts = {
-        'format': 'bestaudio/best',
+        'format': 'ba/b',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'android', 'web']
-            }
-        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
