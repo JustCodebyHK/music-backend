@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import requests
 import yt_dlp
 import redis
 from fastapi import FastAPI, HTTPException, Query
@@ -11,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
 
-# Enable CORS for frontend clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Redis client
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -28,13 +27,11 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Paths for cookie resolution
 RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
 WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"
 LOCAL_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
 def get_cookie_path():
-    """Copy secrets to /tmp so yt-dlp gets write access on Render."""
     if os.path.exists(RENDER_SECRET_COOKIE_PATH):
         try:
             shutil.copyfile(RENDER_SECRET_COOKIE_PATH, WRITABLE_COOKIE_PATH)
@@ -47,14 +44,15 @@ def get_cookie_path():
     return None
 
 def get_yt_dlp_options():
+    # Use flexible fallback format string to prevent format availability errors
     opts = {
-        'format': 'bestaudio/best',
+        'format': 'ba/b/bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android']
+                'player_client': ['ios', 'android', 'mweb']
             }
         },
         'http_headers': {
@@ -95,7 +93,6 @@ def search_music(q: str = Query(..., description="Search query")):
 def get_stream_url(video_id: str):
     cache_key = f"stream_url:{video_id}"
     
-    # 1. Check Redis cache
     try:
         cached_url = redis_client.get(cache_key)
         if cached_url:
@@ -107,7 +104,6 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    # 2. Extract live stream URL
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
     
