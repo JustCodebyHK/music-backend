@@ -44,19 +44,13 @@ def get_cookie_path():
     return None
 
 def get_yt_dlp_options():
-    # Use flexible fallback format string to prevent format availability errors
     opts = {
-        'format': 'ba/b/bestaudio/best',
+        # Omit 'format' so yt-dlp automatically selects the default working stream
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android', 'mweb']
-            }
-        },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
