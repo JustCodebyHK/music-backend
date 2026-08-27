@@ -104,10 +104,20 @@ def get_stream_url(video_id: str):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            if not info or "url" not in info:
+            if not info:
                 raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
             
-            stream_url = info.get("url")
+            stream_url = None
+            if "url" in info:
+                stream_url = info.get("url")
+            elif info.get("requested_formats"):
+                for fmt in info["requested_formats"]:
+                    if fmt.get("acodec") != "none" and fmt.get("url"):
+                        stream_url = fmt["url"]
+                        break
+            
+            if not stream_url:
+                raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
             
             try:
                 redis_client.setex(cache_key, 10800, stream_url)
@@ -134,11 +144,21 @@ def download_audio(video_id: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            if not info or "url" not in info:
+            if not info:
                 raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
                 
-            stream_url = info.get("url")
-            headers = info.get("http_headers", {})
+            stream_url = None
+            if "url" in info:
+                stream_url = info.get("url")
+            elif info.get("requested_formats"):
+                for fmt in info["requested_formats"]:
+                    if fmt.get("acodec") != "none" and fmt.get("url"):
+                        stream_url = fmt["url"]
+                        headers = fmt.get("http_headers", {})
+                        break
+            
+            if not stream_url:
+                raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
 
         req = requests.get(stream_url, headers=headers, stream=True)
         return StreamingResponse(
