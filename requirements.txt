@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 requests
-yt-dlp
 ytmusicapi
 redis
+yt-dlp>=2026.03.10
