@@ -1,10 +1,9 @@
 import os
 import json
 import shutil
-import requests
 import yt_dlp
 import redis
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +14,7 @@ ytm = YTMusic()
 # Enable CORS for frontend clients
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to your frontend domain in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,11 +52,9 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'ignoreerrors': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android'],
-                'skip': ['webpage']
+                'player_client': ['ios', 'android']
             }
         },
         'http_headers': {
@@ -71,11 +68,6 @@ def get_yt_dlp_options():
         opts['cookiefile'] = cookie_path
 
     return opts
-
-def remove_file(path: str):
-    """Helper function for background cleanup of disk files."""
-    if os.path.exists(path):
-        os.remove(path)
 
 @app.get("/")
 def read_root():
@@ -103,7 +95,7 @@ def search_music(q: str = Query(..., description="Search query")):
 def get_stream_url(video_id: str):
     cache_key = f"stream_url:{video_id}"
     
-    # 1. Check Redis cache first
+    # 1. Check Redis cache
     try:
         cached_url = redis_client.get(cache_key)
         if cached_url:
@@ -113,18 +105,20 @@ def get_stream_url(video_id: str):
                 "cached": True
             }
     except redis.RedisError:
-        pass  # Fall back to live extraction if Redis is unreachable
+        pass
 
-    # 2. Extract live stream URL if not cached
+    # 2. Extract live stream URL
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if not info or "url" not in info:
+                raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
+            
             stream_url = info.get("url")
             
-            # Cache the extracted URL for 3 hours (10800 seconds)
             try:
                 redis_client.setex(cache_key, 10800, stream_url)
             except redis.RedisError:
@@ -136,6 +130,8 @@ def get_stream_url(video_id: str):
                 "expires_at": info.get("url_valid_until"),
                 "cached": False
             }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(e)}")
 
@@ -147,6 +143,10 @@ def download_audio(video_id: str):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            
+            if not info or "url" not in info:
+                raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
+                
             stream_url = info.get("url")
             headers = info.get("http_headers", {})
 
@@ -156,22 +156,25 @@ def download_audio(video_id: str):
             media_type="audio/mp4",
             headers={"Content-Disposition": f"attachment; filename={video_id}.m4a"}
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
 
 @app.get("/api/health/cookies")
 def check_cookie_health():
-    """Endpoint to check if the cookies.txt file exists and is functioning."""
     cookie_path = get_cookie_path()
     if not cookie_path:
         return {"status": "warning", "message": "cookies.txt file not found"}
 
-    test_video_id = "dQw4w9WgXcQ"  # Public test video
+    test_video_id = "dQw4w9WgXcQ"
     ydl_opts = get_yt_dlp_options()
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
+            if not info:
+                return {"status": "error", "message": "Extraction returned None"}
         return {"status": "ok", "message": f"Cookies are valid and active (Source: {cookie_path})."}
     except Exception as e:
         return {"status": "invalid_or_expired", "error": str(e), "path": cookie_path}
