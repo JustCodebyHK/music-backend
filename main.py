@@ -45,6 +45,7 @@ def get_yt_dlp_options():
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
+        'cookiefile_prune': False,  # Prevents yt-dlp from trying to write to read-only cookies.txt
         'extractor_args': {
             'youtube': {
                 'player_client': ['ios', 'android', 'web', 'mweb']
