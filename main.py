@@ -49,19 +49,17 @@ def get_cookie_path():
 
 def get_yt_dlp_options():
     opts = {
-        # Exclude DRM formats explicitly to force yt-dlp to grab non-DRM streams
-        'format': 'bestaudio[ext=m4a][has_drm=false]/bestaudio[has_drm=false]/best[has_drm=false]',
+        'format': 'bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                # 'android' and 'mweb' clients avoid the Widevine DRM payload returned by 'tv'
-                'player_client': ['android', 'mweb', 'web', 'ios']
+                'player_client': ['mweb', 'android', 'web']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         }
     }
