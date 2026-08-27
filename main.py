@@ -6,6 +6,7 @@ import redis
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
@@ -146,3 +147,11 @@ def check_cookie_health():
         return {"status": "ok", "message": "Cookies are valid and active."}
     except Exception as e:
         return {"status": "invalid_or_expired", "error": str(e)}
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Restrict to your frontend domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)    
