@@ -26,6 +26,8 @@ def get_cookie_path():
     env_cookie = os.getenv("YOUTUBE_COOKIES_FILE")
     if env_cookie and os.path.exists(env_cookie):
         return env_cookie
+    if os.path.exists(LOCAL_COOKIE_PATH):
+        return LOCAL_COOKIE_PATH
     if os.path.exists(RENDER_SECRET_COOKIE_PATH):
         try:
             with open(RENDER_SECRET_COOKIE_PATH, "rb") as src, open(WRITABLE_COOKIE_PATH, "wb") as dst:
@@ -33,8 +35,6 @@ def get_cookie_path():
             return WRITABLE_COOKIE_PATH
         except Exception:
             return RENDER_SECRET_COOKIE_PATH
-    if os.path.exists(LOCAL_COOKIE_PATH):
-        return LOCAL_COOKIE_PATH
     return None
 
 
