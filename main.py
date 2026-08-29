@@ -53,7 +53,6 @@ def get_yt_dlp_options():
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                # 'mweb' and 'web' directly align with cookies exported from desktop/mobile browsers
                 'player_client': ['mweb', 'web']
             }
         }
@@ -64,6 +63,31 @@ def get_yt_dlp_options():
         opts['cookiefile'] = cookie_path
 
     return opts
+
+@app.get("/api/health/cookies")
+def check_cookie_health():
+    cookie_path = get_cookie_path()
+    if not cookie_path or not os.path.exists(cookie_path):
+        return {"status": "warning", "message": "cookies.txt file not found"}
+
+    test_video_id = "dQw4w9WgXcQ"
+    # Use lightweight extraction options without format constraints specifically for health check
+    health_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'extract_flat': False,
+        'cookiefile': cookie_path
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(health_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
+            if not info:
+                return {"status": "error", "message": "Extraction returned None"}
+        return {"status": "ok", "message": f"Cookies are valid and active (Source: {cookie_path})."}
+    except Exception as e:
+        return {"status": "invalid_or_expired", "error": str(e), "path": cookie_path}
 
 @app.get("/")
 def read_root():
