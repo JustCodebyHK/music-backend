@@ -72,7 +72,7 @@ def get_yt_dlp_options():
     if proxy:
         opts["proxy"] = proxy
     else:
-        opts["proxy"] = None
+        opts["proxy"] = ""
 
     return opts
 
@@ -165,6 +165,7 @@ def download_audio(video_id: str):
 
         session = requests.Session()
         session.trust_env = False
+        session.proxies = {"http": None, "https": None}
         response = session.get(stream_url, headers=headers, stream=True)
         response.raise_for_status()
 
