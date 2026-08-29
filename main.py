@@ -1,15 +1,12 @@
 import os
-import json
-import shutil
 import requests
 import yt_dlp
-import redis
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
-from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Personal Music Service")
+app = FastAPI(title="Music API")
 ytm = YTMusic()
 
 app.add_middleware(
@@ -20,94 +17,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-redis_client = redis.Redis(
-    host=os.getenv("REDIS_HOST", "localhost"),
-    port=int(os.getenv("REDIS_PORT", 6379)),
-    db=0,
-    decode_responses=True
-)
-
-RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
-WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"
 LOCAL_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
+
+def sanitize_proxy_env():
+    if os.getenv("PROXY_URL"):
+        return
+    for key in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        os.environ.pop(key, None)
+
+
+def get_proxy():
+    proxy = os.getenv("PROXY_URL")
+    return proxy.strip() if proxy and proxy.strip() else None
+
+
 def get_cookie_path():
-    if os.path.exists(RENDER_SECRET_COOKIE_PATH):
-        try:
-            shutil.copyfile(RENDER_SECRET_COOKIE_PATH, WRITABLE_COOKIE_PATH)
-            return WRITABLE_COOKIE_PATH
-        except Exception as e:
-            print(f"Error copying secret cookies file: {e}")
-            return RENDER_SECRET_COOKIE_PATH
-    elif os.path.exists(LOCAL_COOKIE_PATH):
+    if os.path.exists(LOCAL_COOKIE_PATH):
         return LOCAL_COOKIE_PATH
     return None
 
 
-def _cookie_is_logged_in(path):
-    """A real YouTube login session must contain LOGIN_INFO (and ideally
-    SAPISID/SID) on .youtube.com. Guest-only cookies will still trigger
-    YouTube's 'sign in to confirm you're not a bot' wall."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read().lower()
-    except Exception:
-        return False
-    has_login_info = "login_info" in content and ".youtube.com" in content
-    has_sid = (".youtube.com" in content and "sapisid" in content)
-    return has_login_info and has_sid
-
-
-def get_proxy():
-    """Residential proxy from env. Datacenter IPs are blocked by YouTube, so
-    set PROXY_URL (e.g. http://user:pass@host:port) to route through a
-    residential IP. Also honours standard HTTPS_PROXY / ALL_PROXY vars."""
-    return os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("ALL_PROXY")
-
-
 def get_yt_dlp_options():
-    # Which client to try first. 'web' needs a PO token; the tv/embedded/
-    # mobile clients use API keys and are far less likely to trigger the
-    # "The page needs to be reloaded" challenge from a datacenter IP.
-    default_clients = ['tv', 'web_embedded', 'android']
-    clients = (
-        os.getenv('YOUTUBE_PLAYER_CLIENT', ','.join(default_clients))
-        .replace(' ', '').split(',') if os.getenv('YOUTUBE_PLAYER_CLIENT')
-        else default_clients
-    )
+    sanitize_proxy_env()
 
     opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': clients,
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["tv", "web_embedded", "android"],
             }
         },
-        'format': 'bestaudio/best',
+        "format": "bestaudio/best",
     }
 
     cookie_path = get_cookie_path()
     if cookie_path:
-        opts['cookiefile'] = cookie_path
+        opts["cookiefile"] = cookie_path
 
     proxy = get_proxy()
     if proxy:
-        opts['proxy'] = proxy
-
-    # PO token (from "bgutils") for the web client, if provided.
-    po_token = os.getenv("YOUTUBE_PO_TOKEN")
-    visitor_data = os.getenv("YOUTUBE_VISITOR_DATA")
-    if po_token and visitor_data:
-        opts['extractor_args']['youtube']['po_token'] = po_token
-        opts['extractor_args']['youtube']['visitor_data'] = visitor_data
+        opts["proxy"] = proxy
 
     return opts
 
+
 @app.get("/")
 def read_root():
-    return {"status": "Backend service is live"}
+    return {"status": "ok", "service": "music-api"}
+
 
 @app.get("/api/search")
 def search_music(q: str = Query(..., description="Search query")):
@@ -115,42 +82,32 @@ def search_music(q: str = Query(..., description="Search query")):
         results = ytm.search(q, filter="songs")
         songs = []
         for item in results:
-            songs.append({
-                "video_id": item.get("videoId"),
-                "title": item.get("title"),
-                "artist": ", ".join([a["name"] for a in item.get("artists", [])]),
-                "album": item.get("album", {}).get("name") if item.get("album") else None,
-                "duration": item.get("duration"),
-                "thumbnail": item.get("thumbnails", [{}])[-1].get("url")
-            })
+            songs.append(
+                {
+                    "video_id": item.get("videoId"),
+                    "title": item.get("title"),
+                    "artist": ", ".join([a["name"] for a in item.get("artists", [])]),
+                    "album": item.get("album", {}).get("name") if item.get("album") else None,
+                    "duration": item.get("duration"),
+                    "thumbnail": item.get("thumbnails", [{}])[-1].get("url"),
+                }
+            )
         return {"results": songs}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url:{video_id}"
-    
-    try:
-        cached_url = redis_client.get(cache_key)
-        if cached_url:
-            return {
-                "video_id": video_id,
-                "stream_url": cached_url,
-                "cached": True
-            }
-    except redis.RedisError:
-        pass
-
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
-    
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if not info:
                 raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
-            
+
             stream_url = None
             if "url" in info:
                 stream_url = info.get("url")
@@ -159,38 +116,32 @@ def get_stream_url(video_id: str):
                     if fmt.get("acodec") != "none" and fmt.get("url"):
                         stream_url = fmt["url"]
                         break
-            
+
             if not stream_url:
                 raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
-            
-            try:
-                redis_client.setex(cache_key, 10800, stream_url)
-            except redis.RedisError:
-                pass
 
             return {
                 "video_id": video_id,
                 "stream_url": stream_url,
                 "expires_at": info.get("url_valid_until"),
-                "cached": False
             }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(exc)}")
+
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
-    
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            
             if not info:
                 raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
-                
+
             stream_url = None
             headers = {}
             if "url" in info:
@@ -202,46 +153,21 @@ def download_audio(video_id: str):
                         stream_url = fmt["url"]
                         headers = fmt.get("http_headers", {})
                         break
-            
+
             if not stream_url:
                 raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
 
-        req = requests.get(stream_url, headers=headers, stream=True)
+        session = requests.Session()
+        session.trust_env = False
+        response = session.get(stream_url, headers=headers, stream=True)
+        response.raise_for_status()
+
         return StreamingResponse(
-            req.iter_content(chunk_size=1024 * 64), 
+            response.iter_content(chunk_size=1024 * 64),
             media_type="audio/mp4",
-            headers={"Content-Disposition": f"attachment; filename={video_id}.m4a"}
+            headers={"Content-Disposition": f"attachment; filename={video_id}.m4a"},
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
-
-@app.get("/api/health/cookies")
-def check_cookie_health():
-    cookie_path = get_cookie_path()
-    if not cookie_path:
-        return {"status": "warning", "message": "cookies.txt file not found"}
-
-    if not _cookie_is_logged_in(cookie_path):
-        return {
-            "status": "not_logged_in",
-            "message": (
-                "Cookie file is missing a YouTube login session (LOGIN_INFO + "
-                "SAPISID on .youtube.com). Export cookies while signed in to "
-                "youtube.com, or set PROXY_URL to a residential proxy."
-            ),
-            "path": cookie_path,
-        }
-
-    test_video_id = "dQw4w9WgXcQ"
-    ydl_opts = get_yt_dlp_options()
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
-            if not info:
-                return {"status": "error", "message": "Extraction returned None"}
-        return {"status": "ok", "message": f"Cookies are valid and active (Source: {cookie_path})."}
-    except Exception as e:
-        return {"status": "invalid_or_expired", "error": str(e), "path": cookie_path}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(exc)}")
