@@ -46,16 +46,17 @@ def get_cookie_path():
     return None
 
 def get_yt_dlp_options():
-    """Clean options that rely on authenticated cookies without enforcing strict format filters."""
     opts = {
+        'format': 'bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Allow yt-dlp to natively negotiate the best unencrypted audio/media stream
-        'format': 'best',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
+        # Force yt-dlp to rely on standard web/android extractor clients without header overrides
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web', 'android'],
+                'player_skip': ['js', 'configs']
+            }
         }
     }
     
