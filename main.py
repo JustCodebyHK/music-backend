@@ -43,21 +43,65 @@ def get_cookie_path():
         return LOCAL_COOKIE_PATH
     return None
 
+
+def _cookie_is_logged_in(path):
+    """A real YouTube login session must contain LOGIN_INFO (and ideally
+    SAPISID/SID) on .youtube.com. Guest-only cookies will still trigger
+    YouTube's 'sign in to confirm you're not a bot' wall."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read().lower()
+    except Exception:
+        return False
+    has_login_info = "login_info" in content and ".youtube.com" in content
+    has_sid = (".youtube.com" in content and "sapisid" in content)
+    return has_login_info and has_sid
+
+
+def get_proxy():
+    """Residential proxy from env. Datacenter IPs are blocked by YouTube, so
+    set PROXY_URL (e.g. http://user:pass@host:port) to route through a
+    residential IP. Also honours standard HTTPS_PROXY / ALL_PROXY vars."""
+    return os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("ALL_PROXY")
+
+
 def get_yt_dlp_options():
+    # Which client to try first. 'web' needs a PO token; the tv/embedded/
+    # mobile clients use API keys and are far less likely to trigger the
+    # "The page needs to be reloaded" challenge from a datacenter IP.
+    default_clients = ['tv', 'web_embedded', 'android']
+    clients = (
+        os.getenv('YOUTUBE_PLAYER_CLIENT', ','.join(default_clients))
+        .replace(' ', '').split(',') if os.getenv('YOUTUBE_PLAYER_CLIENT')
+        else default_clients
+    )
+
     opts = {
-        # Omit 'format' so yt-dlp automatically selects the default working stream
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
+        'extractor_args': {
+            'youtube': {
+                'player_client': clients,
+            }
+        },
+        'format': 'bestaudio/best',
     }
-    
+
     cookie_path = get_cookie_path()
     if cookie_path:
         opts['cookiefile'] = cookie_path
+
+    proxy = get_proxy()
+    if proxy:
+        opts['proxy'] = proxy
+
+    # PO token (from "bgutils") for the web client, if provided.
+    po_token = os.getenv("YOUTUBE_PO_TOKEN")
+    visitor_data = os.getenv("YOUTUBE_VISITOR_DATA")
+    if po_token and visitor_data:
+        opts['extractor_args']['youtube']['po_token'] = po_token
+        opts['extractor_args']['youtube']['visitor_data'] = visitor_data
 
     return opts
 
@@ -148,8 +192,10 @@ def download_audio(video_id: str):
                 raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
                 
             stream_url = None
+            headers = {}
             if "url" in info:
                 stream_url = info.get("url")
+                headers = info.get("http_headers", {})
             elif info.get("requested_formats"):
                 for fmt in info["requested_formats"]:
                     if fmt.get("acodec") != "none" and fmt.get("url"):
@@ -177,9 +223,20 @@ def check_cookie_health():
     if not cookie_path:
         return {"status": "warning", "message": "cookies.txt file not found"}
 
+    if not _cookie_is_logged_in(cookie_path):
+        return {
+            "status": "not_logged_in",
+            "message": (
+                "Cookie file is missing a YouTube login session (LOGIN_INFO + "
+                "SAPISID on .youtube.com). Export cookies while signed in to "
+                "youtube.com, or set PROXY_URL to a residential proxy."
+            ),
+            "path": cookie_path,
+        }
+
     test_video_id = "dQw4w9WgXcQ"
     ydl_opts = get_yt_dlp_options()
-    
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
