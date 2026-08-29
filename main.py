@@ -1,5 +1,7 @@
 import os
+import shutil
 import requests
+import yt_dlp
 import redis
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -17,7 +19,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Redis client
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -25,79 +26,63 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Redundant public extraction nodes
-COBALT_INSTANCES = [
-    "https://cobalt-api.kwippy.com",
-    "https://api.cobalt.tools",
-    "https://cobalt.api.scie.dev"
-]
+RENDER_SECRET_TOKEN_PATH = "/etc/secrets/youtube_oauth2.json"
+WRITABLE_TOKEN_PATH = "/tmp/youtube_oauth2.json"
+LOCAL_TOKEN_PATH = os.path.join(os.path.dirname(__file__), "youtube_oauth2.json")
 
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacydev.net",
-    "https://pipedapi.mha.fi"
-]
-
-INVIDIOUS_INSTANCES = [
-    "https://invidious.nerdvpn.de",
-    "https://inv.tux.pizza",
-    "https://vid.pugices.com"
-]
-
-
-def resolve_via_cobalt(video_url: str) -> str:
-    """Resolve stream URL using Cobalt nodes."""
-    payload = {"url": video_url, "downloadMode": "audio", "audioFormat": "mp3"}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-
-    for instance in COBALT_INSTANCES:
+def get_oauth2_token_path():
+    """Copy Render Secret OAuth2 token to /tmp for write access."""
+    if os.path.exists(RENDER_SECRET_TOKEN_PATH):
         try:
-            res = requests.post(instance, json=payload, headers=headers, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                if "url" in data:
-                    return data["url"]
+            shutil.copyfile(RENDER_SECRET_TOKEN_PATH, WRITABLE_TOKEN_PATH)
+            return WRITABLE_TOKEN_PATH
         except Exception:
-            continue
+            return RENDER_SECRET_TOKEN_PATH
+    elif os.path.exists(LOCAL_TOKEN_PATH):
+        return LOCAL_TOKEN_PATH
     return None
 
+def get_yt_dlp_options():
+    token_path = get_oauth2_token_path()
+    
+    opts = {
+        'format': 'ba/b/best',
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'username': 'oauth2',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv']
+            }
+        }
+    }
+    
+    if token_path:
+        # Pass token file location directly and via extractor arguments for full plugin compatibility
+        opts['oauth2_token_file'] = token_path
+        opts['extractor_args']['youtube']['oauth2_token_file'] = token_path
 
-def resolve_via_piped(video_id: str) -> str:
-    """Resolve stream URL using Piped API nodes."""
-    for instance in PIPED_INSTANCES:
-        try:
-            res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                audio_streams = data.get("audioStreams", [])
-                if audio_streams:
-                    return audio_streams[0].get("url")
-        except Exception:
-            continue
-    return None
+    return opts
 
-
-def resolve_via_invidious(video_id: str) -> str:
-    """Resolve stream URL using Invidious API nodes."""
-    for instance in INVIDIOUS_INSTANCES:
-        try:
-            res = requests.get(f"{instance}/api/v1/videos/{video_id}", timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                adaptive_formats = data.get("adaptiveFormats", [])
-                # Filter for pure audio streams
-                audio_streams = [f for f in adaptive_formats if f.get("type", "").startswith("audio/")]
-                if audio_streams:
-                    return audio_streams[0].get("url")
-        except Exception:
-            continue
-    return None
-
+@app.get("/api/health/oauth2")
+def check_oauth2_health():
+    token_path = get_oauth2_token_path()
+    if not token_path or not os.path.exists(token_path):
+        return {
+            "status": "missing",
+            "message": "OAuth2 token file not found at /etc/secrets/youtube_oauth2.json or local path."
+        }
+    
+    return {
+        "status": "ok",
+        "message": "OAuth2 token file exists and is copied to writable path.",
+        "path": token_path
+    }
 
 @app.get("/")
 def read_root():
     return {"status": "Backend service is live"}
-
 
 @app.get("/api/search")
 def search_music(q: str = Query(..., description="Search query")):
@@ -117,12 +102,10 @@ def search_music(q: str = Query(..., description="Search query")):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
     cache_key = f"stream_url:{video_id}"
-
-    # 1. Check Redis cache
+    
     try:
         cached_url = redis_client.get(cache_key)
         if cached_url:
@@ -130,44 +113,53 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # 2. Sequential failover across Cobalt -> Piped -> Invidious
-    stream_url = resolve_via_cobalt(video_url)
+    ydl_opts = get_yt_dlp_options()
+    url = f"https://www.youtube.com/watch?v={video_id}"
     
-    if not stream_url:
-        stream_url = resolve_via_piped(video_id)
-        
-    if not stream_url:
-        stream_url = resolve_via_invidious(video_id)
-
-    if not stream_url:
-        raise HTTPException(status_code=502, detail="All extraction nodes failed to return a stream URL.")
-
-    # 3. Cache valid stream URL (30 minutes TTL to account for token expiration)
     try:
-        redis_client.setex(cache_key, 1800, stream_url)
-    except redis.RedisError:
-        pass
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info or "url" not in info:
+                raise HTTPException(status_code=404, detail="Audio stream URL not found.")
+            
+            stream_url = info.get("url")
+            
+            try:
+                redis_client.setex(cache_key, 10800, stream_url)
+            except redis.RedisError:
+                pass
 
-    return {
-        "video_id": video_id,
-        "stream_url": stream_url,
-        "cached": False
-    }
-
+            return {
+                "video_id": video_id,
+                "stream_url": stream_url,
+                "cached": False
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(e)}")
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    stream_data = get_stream_url(video_id)
-    stream_url = stream_data["stream_url"]
-
+    ydl_opts = get_yt_dlp_options()
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    
     try:
-        req = requests.get(stream_url, stream=True, timeout=15)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info or "url" not in info:
+                raise HTTPException(status_code=404, detail="Could not extract stream link.")
+                
+            stream_url = info.get("url")
+            headers = info.get("http_headers", {})
+
+        req = requests.get(stream_url, headers=headers, stream=True)
         return StreamingResponse(
-            req.iter_content(chunk_size=1024 * 64),
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": f"attachment; filename={video_id}.mp3"}
+            req.iter_content(chunk_size=1024 * 64), 
+            media_type="audio/mp4",
+            headers={"Content-Disposition": f"attachment; filename={video_id}.m4a"}
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to stream download: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
