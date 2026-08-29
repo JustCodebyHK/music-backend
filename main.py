@@ -77,14 +77,18 @@ def check_cookie_health():
         return {"status": "warning", "message": "cookies.txt file not found"}
 
     test_video_id = "dQw4w9WgXcQ"
+    
+    # Lightweight extraction options focused purely on verifying session authentication
     health_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
+        'extract_flat': 'in_playlist',
+        'format': 'ba/b/best',
         'cookiefile': cookie_path,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios'],
+                'player_client': ['mweb', 'android'],
                 'skip': ['webpage']
             }
         }
