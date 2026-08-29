@@ -1,7 +1,5 @@
 import os
-import shutil
 import requests
-import yt_dlp
 import redis
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -11,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
 
-# Enable CORS for frontend clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,84 +25,59 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Cookie resolution paths
-RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
-WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"
-LOCAL_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
+# List of public Cobalt instances for automatic failover
+COBALT_INSTANCES = [
+    "https://cobalt-api.kwippy.com",
+    "https://api.cobalt.tools",
+]
 
-def get_cookie_path():
-    """Copy Render Secret File to /tmp so yt-dlp gets write access without crash."""
-    if os.path.exists(RENDER_SECRET_COOKIE_PATH):
+# Public Piped API instance for secondary failover
+PIPED_API_URL = "https://pipedapi.kavin.rocks"
+
+
+def fetch_stream_via_cobalt(video_url: str) -> str:
+    """Attempt to resolve a direct stream URL using Cobalt instances."""
+    payload = {
+        "url": video_url,
+        "downloadMode": "audio",
+        "audioFormat": "mp3"
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    for instance in COBALT_INSTANCES:
         try:
-            shutil.copyfile(RENDER_SECRET_COOKIE_PATH, WRITABLE_COOKIE_PATH)
-            return WRITABLE_COOKIE_PATH
+            res = requests.post(instance, json=payload, headers=headers, timeout=8)
+            if res.status_code == 200:
+                data = res.json()
+                if "url" in data:
+                    return data["url"]
         except Exception:
-            return RENDER_SECRET_COOKIE_PATH
-    elif os.path.exists(LOCAL_COOKIE_PATH):
-        return LOCAL_COOKIE_PATH
+            continue
     return None
 
-def get_yt_dlp_options():
-    opts = {
-        'format': 'ba/b/best',
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                # Android/iOS clients bypass desktop "page reload" requirements
-                'player_client': ['android', 'ios', 'mweb'],
-                'skip': ['webpage']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-    }
-    
-    cookie_path = get_cookie_path()
-    if cookie_path:
-        opts['cookiefile'] = cookie_path
 
-    return opts
-
-@app.get("/api/health/cookies")
-def check_cookie_health():
-    cookie_path = get_cookie_path()
-    if not cookie_path or not os.path.exists(cookie_path):
-        return {"status": "warning", "message": "cookies.txt file not found"}
-
-    test_video_id = "dQw4w9WgXcQ"
-    
-    # Lightweight extraction options focused purely on verifying session authentication
-    health_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'extract_flat': 'in_playlist',
-        'format': 'ba/b/best',
-        'cookiefile': cookie_path,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'android'],
-                'skip': ['webpage']
-            }
-        }
-    }
-    
+def fetch_stream_via_piped(video_id: str) -> str:
+    """Fallback resolution via Piped API."""
     try:
-        with yt_dlp.YoutubeDL(health_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
-            if not info:
-                return {"status": "error", "message": "Extraction returned None"}
-        return {"status": "ok", "message": f"Cookies are valid and active (Source: {cookie_path})."}
-    except Exception as e:
-        return {"status": "invalid_or_expired", "error": str(e), "path": cookie_path}
+        res = requests.get(f"{PIPED_API_URL}/streams/{video_id}", timeout=8)
+        if res.status_code == 200:
+            data = res.json()
+            audio_streams = data.get("audioStreams", [])
+            if audio_streams:
+                # Get highest quality audio stream
+                return audio_streams[0].get("url")
+    except Exception:
+        pass
+    return None
+
 
 @app.get("/")
 def read_root():
     return {"status": "Backend service is live"}
+
 
 @app.get("/api/search")
 def search_music(q: str = Query(..., description="Search query")):
@@ -125,10 +97,11 @@ def search_music(q: str = Query(..., description="Search query")):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
     cache_key = f"stream_url:{video_id}"
-    
+
     # 1. Check Redis cache
     try:
         cached_url = redis_client.get(cache_key)
@@ -137,73 +110,43 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    # 2. Extract live stream URL
-    ydl_opts = get_yt_dlp_options()
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info or "url" not in info:
-                raise HTTPException(status_code=404, detail="Audio stream URL not found for this video.")
-            
-            stream_url = info.get("url")
-            
-            try:
-                redis_client.setex(cache_key, 10800, stream_url)  # Cache for 3 hours
-            except redis.RedisError:
-                pass
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
 
-            return {
-                "video_id": video_id,
-                "stream_url": stream_url,
-                "expires_at": info.get("url_valid_until"),
-                "cached": False
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(e)}")
+    # 2. Try Cobalt primary resolution
+    stream_url = fetch_stream_via_cobalt(video_url)
+
+    # 3. Fallback to Piped API
+    if not stream_url:
+        stream_url = fetch_stream_via_piped(video_id)
+
+    if not stream_url:
+        raise HTTPException(status_code=502, detail="Unable to extract stream from extraction providers.")
+
+    # 4. Cache valid stream URL (1 hour TTL)
+    try:
+        redis_client.setex(cache_key, 3600, stream_url)
+    except redis.RedisError:
+        pass
+
+    return {
+        "video_id": video_id,
+        "stream_url": stream_url,
+        "cached": False
+    }
+
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    ydl_opts = get_yt_dlp_options()
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info or "url" not in info:
-                raise HTTPException(status_code=404, detail="Could not extract audio download link from YouTube.")
-                
-            stream_url = info.get("url")
-            headers = info.get("http_headers", {})
+    # Fetch stream URL using helper logic
+    stream_data = get_stream_url(video_id)
+    stream_url = stream_data["stream_url"]
 
-        req = requests.get(stream_url, headers=headers, stream=True)
+    try:
+        req = requests.get(stream_url, stream=True)
         return StreamingResponse(
-            req.iter_content(chunk_size=1024 * 64), 
-            media_type="audio/mp4",
-            headers={"Content-Disposition": f"attachment; filename={video_id}.m4a"}
+            req.iter_content(chunk_size=1024 * 64),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f"attachment; filename={video_id}.mp3"}
         )
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
-
-@app.get("/api/health/cookies")
-def check_cookie_health():
-    cookie_path = get_cookie_path()
-    if not cookie_path:
-        return {"status": "warning", "message": "cookies.txt file not found"}
-
-    test_video_id = "dQw4w9WgXcQ"
-    ydl_opts = get_yt_dlp_options()
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={test_video_id}", download=False)
-            if not info:
-                return {"status": "error", "message": "Extraction returned None"}
-        return {"status": "ok", "message": f"Cookies are valid and active (Source: {cookie_path})."}
-    except Exception as e:
-        return {"status": "invalid_or_expired", "error": str(e), "path": cookie_path}
+        raise HTTPException(status_code=500, detail=f"Failed to stream download: {str(e)}")
