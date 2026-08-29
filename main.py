@@ -51,17 +51,16 @@ def get_yt_dlp_options():
         'no_warnings': True,
         'noplaylist': True,
         'username': 'oauth2',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv']
-            }
-        }
+        # Do not manually pass player_client here; let the plugin control the client payload
     }
     
     if token_path:
-        # Pass token file location directly and via extractor arguments for full plugin compatibility
         opts['oauth2_token_file'] = token_path
-        opts['extractor_args']['youtube']['oauth2_token_file'] = token_path
+        opts['extractor_args'] = {
+            'youtube': {
+                'oauth2_token_file': [token_path]
+            }
+        }
 
     return opts
 
