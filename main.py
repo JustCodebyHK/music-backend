@@ -17,41 +17,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
+WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"
 LOCAL_COOKIE_PATH = os.path.join(os.path.dirname(__file__), "cookies.txt")
 
 
-def sanitize_proxy_env():
-    if os.getenv("PROXY_URL"):
-        return
-    for key in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-    ):
-        os.environ.pop(key, None)
-    os.environ["NO_PROXY"] = "*"
-    os.environ["no_proxy"] = "*"
-
-
-def get_proxy():
-    proxy = os.getenv("PROXY_URL")
-    return proxy.strip() if proxy and proxy.strip() else None
-
-
 def get_cookie_path():
+    env_cookie = os.getenv("YOUTUBE_COOKIES_FILE")
+    if env_cookie and os.path.exists(env_cookie):
+        return env_cookie
+    if os.path.exists(RENDER_SECRET_COOKIE_PATH):
+        try:
+            with open(RENDER_SECRET_COOKIE_PATH, "rb") as src, open(WRITABLE_COOKIE_PATH, "wb") as dst:
+                dst.write(src.read())
+            return WRITABLE_COOKIE_PATH
+        except Exception:
+            return RENDER_SECRET_COOKIE_PATH
     if os.path.exists(LOCAL_COOKIE_PATH):
         return LOCAL_COOKIE_PATH
     return None
 
 
-def get_yt_dlp_options():
-    sanitize_proxy_env()
+def youtube_cookie_is_valid(cookie_path):
+    if not cookie_path or not os.path.exists(cookie_path):
+        return False
+    try:
+        with open(cookie_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read().lower()
+    except Exception:
+        return False
 
+    has_youtube_domain = ".youtube.com" in content or "youtube.com" in content
+    has_login_info = "login_info" in content
+    has_sapisid = "sapisid" in content
+    return has_youtube_domain and has_login_info and has_sapisid
+
+
+def get_yt_dlp_options():
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -62,19 +64,32 @@ def get_yt_dlp_options():
             }
         },
         "format": "bestaudio/best",
+        "proxy": "",
     }
 
     cookie_path = get_cookie_path()
     if cookie_path:
         opts["cookiefile"] = cookie_path
 
-    proxy = get_proxy()
-    if proxy:
-        opts["proxy"] = proxy
-    else:
-        opts["proxy"] = ""
-
     return opts
+
+
+def require_youtube_cookies():
+    cookie_path = get_cookie_path()
+    if not cookie_path:
+        raise HTTPException(
+            status_code=401,
+            detail="No cookies file found. Export a real YouTube session cookie file as cookies.txt or set YOUTUBE_COOKIES_FILE.",
+        )
+    if not youtube_cookie_is_valid(cookie_path):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "The cookie file is not a valid YouTube authenticated session. "
+                "Export cookies while signed in to youtube.com and make sure they contain .youtube.com login_info + SAPISID."
+            ),
+        )
+    return cookie_path
 
 
 @app.get("/")
@@ -105,6 +120,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
+    require_youtube_cookies()
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -139,6 +155,7 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
+    require_youtube_cookies()
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
 
