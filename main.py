@@ -25,31 +25,34 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# List of public Cobalt instances for automatic failover
+# Redundant public extraction nodes
 COBALT_INSTANCES = [
     "https://cobalt-api.kwippy.com",
     "https://api.cobalt.tools",
+    "https://cobalt.api.scie.dev"
 ]
 
-# Public Piped API instance for secondary failover
-PIPED_API_URL = "https://pipedapi.kavin.rocks"
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.privacydev.net",
+    "https://pipedapi.mha.fi"
+]
+
+INVIDIOUS_INSTANCES = [
+    "https://invidious.nerdvpn.de",
+    "https://inv.tux.pizza",
+    "https://vid.pugices.com"
+]
 
 
-def fetch_stream_via_cobalt(video_url: str) -> str:
-    """Attempt to resolve a direct stream URL using Cobalt instances."""
-    payload = {
-        "url": video_url,
-        "downloadMode": "audio",
-        "audioFormat": "mp3"
-    }
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
+def resolve_via_cobalt(video_url: str) -> str:
+    """Resolve stream URL using Cobalt nodes."""
+    payload = {"url": video_url, "downloadMode": "audio", "audioFormat": "mp3"}
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     for instance in COBALT_INSTANCES:
         try:
-            res = requests.post(instance, json=payload, headers=headers, timeout=8)
+            res = requests.post(instance, json=payload, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 if "url" in data:
@@ -59,18 +62,35 @@ def fetch_stream_via_cobalt(video_url: str) -> str:
     return None
 
 
-def fetch_stream_via_piped(video_id: str) -> str:
-    """Fallback resolution via Piped API."""
-    try:
-        res = requests.get(f"{PIPED_API_URL}/streams/{video_id}", timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            audio_streams = data.get("audioStreams", [])
-            if audio_streams:
-                # Get highest quality audio stream
-                return audio_streams[0].get("url")
-    except Exception:
-        pass
+def resolve_via_piped(video_id: str) -> str:
+    """Resolve stream URL using Piped API nodes."""
+    for instance in PIPED_INSTANCES:
+        try:
+            res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                audio_streams = data.get("audioStreams", [])
+                if audio_streams:
+                    return audio_streams[0].get("url")
+        except Exception:
+            continue
+    return None
+
+
+def resolve_via_invidious(video_id: str) -> str:
+    """Resolve stream URL using Invidious API nodes."""
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            res = requests.get(f"{instance}/api/v1/videos/{video_id}", timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                adaptive_formats = data.get("adaptiveFormats", [])
+                # Filter for pure audio streams
+                audio_streams = [f for f in adaptive_formats if f.get("type", "").startswith("audio/")]
+                if audio_streams:
+                    return audio_streams[0].get("url")
+        except Exception:
+            continue
     return None
 
 
@@ -112,19 +132,21 @@ def get_stream_url(video_id: str):
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # 2. Try Cobalt primary resolution
-    stream_url = fetch_stream_via_cobalt(video_url)
-
-    # 3. Fallback to Piped API
+    # 2. Sequential failover across Cobalt -> Piped -> Invidious
+    stream_url = resolve_via_cobalt(video_url)
+    
     if not stream_url:
-        stream_url = fetch_stream_via_piped(video_id)
+        stream_url = resolve_via_piped(video_id)
+        
+    if not stream_url:
+        stream_url = resolve_via_invidious(video_id)
 
     if not stream_url:
-        raise HTTPException(status_code=502, detail="Unable to extract stream from extraction providers.")
+        raise HTTPException(status_code=502, detail="All extraction nodes failed to return a stream URL.")
 
-    # 4. Cache valid stream URL (1 hour TTL)
+    # 3. Cache valid stream URL (30 minutes TTL to account for token expiration)
     try:
-        redis_client.setex(cache_key, 3600, stream_url)
+        redis_client.setex(cache_key, 1800, stream_url)
     except redis.RedisError:
         pass
 
@@ -137,12 +159,11 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    # Fetch stream URL using helper logic
     stream_data = get_stream_url(video_id)
     stream_url = stream_data["stream_url"]
 
     try:
-        req = requests.get(stream_url, stream=True)
+        req = requests.get(stream_url, stream=True, timeout=15)
         return StreamingResponse(
             req.iter_content(chunk_size=1024 * 64),
             media_type="audio/mpeg",
