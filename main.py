@@ -47,16 +47,14 @@ def get_cookie_path():
 
 def get_yt_dlp_options():
     opts = {
-        # Fallback to any valid stream (audio or video) so format matching never fails
         'format': 'ba/b/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                # tv_embedded and android_creator bypass the datacenter PO-token check
-                'player_client': ['tv_embedded', 'android_creator', 'ios'],
-                'skip': ['webpage']
+                # 'mweb' and 'web' directly align with cookies exported from desktop/mobile browsers
+                'player_client': ['mweb', 'web']
             }
         }
     }
