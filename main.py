@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
 
+# Enable CORS for cross-origin frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize Redis client with environment variables
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -26,12 +28,14 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+# Token paths for local execution vs Render deployment
 RENDER_SECRET_TOKEN_PATH = "/etc/secrets/youtube_oauth2.json"
 WRITABLE_TOKEN_PATH = "/tmp/youtube_oauth2.json"
 LOCAL_TOKEN_PATH = os.path.join(os.path.dirname(__file__), "youtube_oauth2.json")
 
+
 def get_oauth2_token_path():
-    """Copy Render Secret OAuth2 token to /tmp for write access."""
+    """Ensure the OAuth2 token is copied to a writable path (/tmp) on Render."""
     if os.path.exists(RENDER_SECRET_TOKEN_PATH):
         try:
             shutil.copyfile(RENDER_SECRET_TOKEN_PATH, WRITABLE_TOKEN_PATH)
@@ -42,7 +46,9 @@ def get_oauth2_token_path():
         return LOCAL_TOKEN_PATH
     return None
 
+
 def get_yt_dlp_options():
+    """Build yt-dlp configuration using OAuth2 authentication and the TV client target."""
     token_path = get_oauth2_token_path()
     
     opts = {
@@ -51,21 +57,28 @@ def get_yt_dlp_options():
         'no_warnings': True,
         'noplaylist': True,
         'username': 'oauth2',
-        # Do not manually pass player_client here; let the plugin control the client payload
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv']
+            }
+        }
     }
     
     if token_path:
         opts['oauth2_token_file'] = token_path
-        opts['extractor_args'] = {
-            'youtube': {
-                'oauth2_token_file': [token_path]
-            }
-        }
+        opts['extractor_args']['youtube']['oauth2_token_file'] = token_path
 
     return opts
 
+
+@app.get("/")
+def read_root():
+    return {"status": "Backend service is live"}
+
+
 @app.get("/api/health/oauth2")
 def check_oauth2_health():
+    """Verify if the OAuth2 token is successfully mounted and accessible."""
     token_path = get_oauth2_token_path()
     if not token_path or not os.path.exists(token_path):
         return {
@@ -75,16 +88,14 @@ def check_oauth2_health():
     
     return {
         "status": "ok",
-        "message": "OAuth2 token file exists and is copied to writable path.",
+        "message": "OAuth2 token file exists and is active.",
         "path": token_path
     }
 
-@app.get("/")
-def read_root():
-    return {"status": "Backend service is live"}
 
 @app.get("/api/search")
 def search_music(q: str = Query(..., description="Search query")):
+    """Search YouTube Music for tracks."""
     try:
         results = ytm.search(q, filter="songs")
         songs = []
@@ -101,10 +112,13 @@ def search_music(q: str = Query(..., description="Search query")):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
+    """Extract direct audio stream URL and cache in Redis."""
     cache_key = f"stream_url:{video_id}"
     
+    # 1. Check Redis cache
     try:
         cached_url = redis_client.get(cache_key)
         if cached_url:
@@ -112,6 +126,7 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
+    # 2. Extract using yt-dlp + OAuth2
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
     
@@ -123,6 +138,7 @@ def get_stream_url(video_id: str):
             
             stream_url = info.get("url")
             
+            # 3. Cache valid stream URL (3 hours TTL)
             try:
                 redis_client.setex(cache_key, 10800, stream_url)
             except redis.RedisError:
@@ -138,8 +154,10 @@ def get_stream_url(video_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to extract stream: {str(e)}")
 
+
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
+    """Stream direct audio payload back to client for download."""
     ydl_opts = get_yt_dlp_options()
     url = f"https://www.youtube.com/watch?v={video_id}"
     
