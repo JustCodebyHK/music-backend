@@ -53,8 +53,14 @@ def get_yt_dlp_options():
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['mweb', 'web']
+                # Android/iOS clients bypass desktop "page reload" requirements
+                'player_client': ['android', 'ios', 'mweb'],
+                'skip': ['webpage']
             }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
     
@@ -71,13 +77,17 @@ def check_cookie_health():
         return {"status": "warning", "message": "cookies.txt file not found"}
 
     test_video_id = "dQw4w9WgXcQ"
-    # Use lightweight extraction options without format constraints specifically for health check
     health_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'extract_flat': False,
-        'cookiefile': cookie_path
+        'cookiefile': cookie_path,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+                'skip': ['webpage']
+            }
+        }
     }
     
     try:
