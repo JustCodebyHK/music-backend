@@ -47,16 +47,21 @@ def get_cookie_path():
 
 def get_yt_dlp_options():
     opts = {
-        'format': 'bestaudio/best',
+        # Fallback to general video stream if pure audio format is hidden by YouTube
+        'format': 'ba/b',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        # Force yt-dlp to rely on standard web/android extractor clients without header overrides
         'extractor_args': {
             'youtube': {
-                'player_client': ['web', 'android'],
-                'player_skip': ['js', 'configs']
+                # Force iOS and mweb clients which do not enforce PoToken verification
+                'player_client': ['ios', 'mweb'],
+                'skip': ['webpage']
             }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
     
