@@ -47,21 +47,17 @@ def get_cookie_path():
 
 def get_yt_dlp_options():
     opts = {
-        # Fallback to general video stream if pure audio format is hidden by YouTube
-        'format': 'ba/b',
+        # Fallback to any valid stream (audio or video) so format matching never fails
+        'format': 'ba/b/best',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'extractor_args': {
             'youtube': {
-                # Force iOS and mweb clients which do not enforce PoToken verification
-                'player_client': ['ios', 'mweb'],
+                # tv_embedded and android_creator bypass the datacenter PO-token check
+                'player_client': ['tv_embedded', 'android_creator', 'ios'],
                 'skip': ['webpage']
             }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
-            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
     
