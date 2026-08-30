@@ -39,7 +39,8 @@ def fetch_audio_from_cobalt(video_id: str) -> str:
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {COBALT_API_KEY}"
+        "Authorization": f"Bearer {COBALT_API_KEY}",
+        "bypass-tunnel-reminder": "true"  # Bypasses localtunnel landing page
     }
 
     try:
