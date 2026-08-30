@@ -5,9 +5,40 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
+import urllib3
+
+# Strip any inherited proxy env vars so requests/yt-dlp connect direct.
+# A 400 from a CONNECT tunnel usually means a misconfigured system proxy.
+for _p in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "REQUEST_PROXY"):
+    os.environ.pop(_p, None)
+os.environ["NO_PROXY"] = "*"
+os.environ["no_proxy"] = "*"
+
+# Force requests to disable proxy completely
+os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+# Disable urllib3 proxy warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = FastAPI(title="Personal Music Service")
-ytm = YTMusic()
+
+# Create a requests session that explicitly disables proxies
+requests_session = requests.Session()
+requests_session.proxies = {"http": "", "https": ""}
+requests_session.trust_env = False  # Do NOT trust environment proxy settings
+
+# Force yt-dlp (used internally by ytmusicapi) to bypass any broken system proxy.
+# "proxy": "" makes requests go direct instead of through HTTP_PROXY/HTTPS_PROXY.
+yt_dlp_options = {
+    "proxy": "",
+    "socket_timeout": 30,
+    "source_address": "0.0.0.0",  # Bind to local interface, avoid proxy
+}
+ytm = YTMusic(
+    requests_session=requests_session,
+    proxies={"http": "", "https": ""}  # Force no proxy
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,7 +73,7 @@ def fetch_audio_from_cobalt(video_id: str) -> str:
     }
 
     try:
-        res = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=20)
+        res = requests_session.post(COBALT_API_URL, json=payload, headers=headers, timeout=20)
         if res.status_code == 200:
             data = res.json()
             if "url" in data:

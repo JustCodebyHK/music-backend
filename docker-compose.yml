@@ -1,15 +1,37 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   cobalt-api:
     image: ghcr.io/imputnet/cobalt:10
     restart: unless-stopped
     ports:
       - "9000:9000"
     environment:
-      # Set your internal/public API URL
-      API_URL: "http://YOUR_SERVER_IP:9000/"
-      # Require an API key so unauthorized users cannot abuse your instance
-      API_KEY: "YOUR_CUSTOM_SECRET_API_KEY"
-      # Require cookie/session validation settings if needed
+      API_URL: "https://corners-editors-seeker-airplane.trycloudflare.com/"
+      API_KEY: "my_home_secret_key_123"
       WEB_ENABLE: "true"
+
+  music-backend:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - cobalt-api
+    environment:
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      # Replace with your actual Cobalt API key above
+      COBALT_API_URL: "http://cobalt-api:9000/"
+      COBALT_API_KEY: "YOUR_CUSTOM_SECRET_API_KEY"
+      # Strip any inherited proxy env vars so yt-dlp connects direct
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: "*"
