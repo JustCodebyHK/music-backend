@@ -23,23 +23,23 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Private Cobalt Instance Configuration
 COBALT_API_URL = os.getenv("COBALT_API_URL", "http://YOUR_SERVER_IP:9000/")
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "YOUR_CUSTOM_SECRET_API_KEY")
 
 
 def fetch_audio_from_cobalt(video_id: str) -> str:
-    """Query self-hosted Cobalt instance for an MP3 audio stream URL."""
+    """Query self-hosted Cobalt instance for an audio stream URL."""
     payload = {
         "url": f"https://www.youtube.com/watch?v={video_id}",
+        "videoQuality": "720",
         "downloadMode": "audio",
-        "audioFormat": "mp3"
+        "audioFormat": "mp3",
+        "youtubeVideoCodec": "h264"
     }
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {COBALT_API_KEY}",
-        "bypass-tunnel-reminder": "true"
+        "Authorization": f"Bearer {COBALT_API_KEY}"
     }
 
     try:
@@ -81,9 +81,8 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v6:{video_id}"
+    cache_key = f"stream_url_v7:{video_id}"
 
-    # Check Redis cache
     try:
         cached_url = redis_client.get(cache_key)
         if cached_url:
@@ -91,10 +90,8 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    # Extract via private Cobalt instance
     stream_url = fetch_audio_from_cobalt(video_id)
 
-    # Cache stream URL (3 hours TTL)
     try:
         redis_client.setex(cache_key, 10800, stream_url)
     except redis.RedisError:
@@ -109,7 +106,7 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Fetch stream into memory and verify payload bytes before sending to client."""
+    """Proxy audio payload with browser headers to prevent empty 0-byte streams."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
@@ -117,22 +114,24 @@ def download_audio(video_id: str):
         raise HTTPException(status_code=404, detail="Stream URL resolution failed.")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
 
     try:
-        res = requests.get(stream_url, headers=headers, timeout=30)
+        session = requests.Session()
+        res = session.get(stream_url, headers=headers, allow_redirects=True, timeout=45)
         
-        # Check if stream fetch succeeded
         if res.status_code != 200:
             raise HTTPException(
                 status_code=res.status_code, 
-                detail=f"Tunnel rejected stream request. Status: {res.status_code}, Response text: {res.text[:300]}"
+                detail=f"Tunnel rejected stream request. Status: {res.status_code}, Text: {res.text[:300]}"
             )
 
-        # Check for zero-byte response
         if len(res.content) == 0:
             raise HTTPException(status_code=500, detail="Cobalt returned an empty payload (0 bytes).")
 
@@ -145,4 +144,4 @@ def download_audio(video_id: str):
             }
         )
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch audio stream from tunnel: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch audio stream: {str(e)}")
