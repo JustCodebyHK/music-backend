@@ -11,12 +11,13 @@ services:
       retries: 5
 
   cobalt-api:
-    # Keep this aligned with Cobalt's current supported container release.
-    image: ghcr.io/imputnet/cobalt:11
+    # Use the locally available Cobalt image; update this when registry access is available.
+    image: ghcr.io/imputnet/cobalt:10
     init: true
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      # Host port 9005 is the Cloudflare Tunnel origin; Cobalt listens on 9000 inside Docker.
+      - "9005:9000"
     environment:
       # Public URL Cobalt uses to build absolute stream links for clients
       API_URL: "https://corners-editors-seeker-airplane.trycloudflare.com/"
