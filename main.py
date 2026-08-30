@@ -1,12 +1,9 @@
 import os
-import requests
 import redis
-import httpx
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from ytmusicapi import YTMusic
+import requests
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Response
+from ytmusicapi import YTMusic
 
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
@@ -84,8 +81,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    # Bumped key version to stream_url_v5 to bypass any cached response
-    cache_key = f"stream_url_v5:{video_id}"
+    cache_key = f"stream_url_v6:{video_id}"
 
     # Check Redis cache
     try:
@@ -113,14 +109,13 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Buffer stream in memory and inspect status/errors."""
+    """Fetch stream into memory and verify payload bytes before sending to client."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
     if not stream_url:
-        raise HTTPException(status_code=404, detail="Stream URL not found")
+        raise HTTPException(status_code=404, detail="Stream URL resolution failed.")
 
-    # Pretend to be a real browser to bypass Cloudflare bot checks
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*",
@@ -128,21 +123,19 @@ def download_audio(video_id: str):
     }
 
     try:
-        # Download the file completely into memory (buffered)
         res = requests.get(stream_url, headers=headers, timeout=30)
         
-        # If Cloudflare or Cobalt threw an error, return the actual text error response
+        # Check if stream fetch succeeded
         if res.status_code != 200:
             raise HTTPException(
                 status_code=res.status_code, 
-                detail=f"Cloudflare Tunnel rejected stream request. Status: {res.status_code}, Body: {res.text[:200]}"
+                detail=f"Tunnel rejected stream request. Status: {res.status_code}, Response text: {res.text[:300]}"
             )
 
-        # Ensure we actually received data bytes
+        # Check for zero-byte response
         if len(res.content) == 0:
-            raise HTTPException(status_code=500, detail="Cobalt returned 0 bytes of content.")
+            raise HTTPException(status_code=500, detail="Cobalt returned an empty payload (0 bytes).")
 
-        # Return full content with exact size
         return Response(
             content=res.content,
             media_type="audio/mpeg",
@@ -152,4 +145,4 @@ def download_audio(video_id: str):
             }
         )
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch from Cloudflare Tunnel: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch audio stream from tunnel: {str(e)}")
