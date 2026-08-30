@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Response
 
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
@@ -111,46 +112,44 @@ def get_stream_url(video_id: str):
 
 
 @app.get("/api/download/{video_id}")
-async def download_audio(video_id: str):
-    """Asynchronously stream binary audio payload to avoid 0 KB buffer drops."""
+def download_audio(video_id: str):
+    """Buffer stream in memory and inspect status/errors."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
     if not stream_url:
         raise HTTPException(status_code=404, detail="Stream URL not found")
 
-    client = httpx.AsyncClient(follow_redirects=True, timeout=60.0)
-    
+    # Pretend to be a real browser to bypass Cloudflare bot checks
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
+
     try:
-        req = client.build_request("GET", stream_url)
-        r = await client.send(req, stream=True)
+        # Download the file completely into memory (buffered)
+        res = requests.get(stream_url, headers=headers, timeout=30)
         
-        if r.status_code != 200:
-            await r.aclose()
-            await client.aclose()
-            raise HTTPException(status_code=r.status_code, detail="Cobalt stream payload failed.")
+        # If Cloudflare or Cobalt threw an error, return the actual text error response
+        if res.status_code != 200:
+            raise HTTPException(
+                status_code=res.status_code, 
+                detail=f"Cloudflare Tunnel rejected stream request. Status: {res.status_code}, Body: {res.text[:200]}"
+            )
 
-        async def file_sender():
-            try:
-                async for chunk in r.aiter_bytes(chunk_size=65536):
-                    yield chunk
-            finally:
-                await r.aclose()
-                await client.aclose()
+        # Ensure we actually received data bytes
+        if len(res.content) == 0:
+            raise HTTPException(status_code=500, detail="Cobalt returned 0 bytes of content.")
 
-        headers = {
-            "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-        
-        if "content-length" in r.headers:
-            headers["Content-Length"] = r.headers["content-length"]
-
-        return StreamingResponse(
-            file_sender(),
+        # Return full content with exact size
+        return Response(
+            content=res.content,
             media_type="audio/mpeg",
-            headers=headers
+            headers={
+                "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
+                "Content-Length": str(len(res.content))
+            }
         )
-    except Exception as e:
-        await client.aclose()
-        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch from Cloudflare Tunnel: {str(e)}")
