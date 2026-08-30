@@ -11,8 +11,7 @@ services:
       retries: 5
 
   cobalt-api:
-    # Use the locally available Cobalt image; update this when registry access is available.
-    image: ghcr.io/imputnet/cobalt:10
+    image: ghcr.io/imputnet/cobalt:11
     init: true
     restart: unless-stopped
     ports:
@@ -24,6 +23,9 @@ services:
       # Must match the key your backend uses below
       API_KEY: "my_home_secret_key_123"
       WEB_ENABLE: "true"
+      # Provides the YouTube poToken/visitor-data session required by current
+      # YouTube anti-bot checks.
+      YOUTUBE_SESSION_SERVER: "http://yt-session-generator:8080/token"
     # Mount cookies if YouTube blocks your server's IP for search too
     volumes:
       - ./cookies.txt:/cookies.txt:ro
@@ -33,6 +35,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  yt-session-generator:
+    image: ghcr.io/imputnet/yt-session-generator:webserver
+    init: true
+    restart: unless-stopped
 
   music-backend:
     build: .

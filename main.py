@@ -106,26 +106,14 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v11:{video_id}"
-
-    try:
-        cached_url = redis_client.get(cache_key)
-        if cached_url:
-            return {"video_id": video_id, "stream_url": cached_url, "cached": True}
-    except redis.RedisError:
-        pass
-
+    # Cobalt tunnel URLs are short-lived (about 90 seconds by default), so they
+    # must never be stored in Redis. A cached URL causes a 404/0 KB download.
     stream_url = fetch_audio_from_cobalt(video_id)
-
-    try:
-        redis_client.setex(cache_key, 10800, stream_url)
-    except redis.RedisError:
-        pass
 
     return {
         "video_id": video_id,
         "stream_url": stream_url,
-        "cached": False
+        "cached": False,
     }
 
 
