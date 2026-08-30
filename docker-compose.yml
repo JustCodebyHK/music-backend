@@ -6,6 +6,11 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   cobalt-api:
     image: ghcr.io/imputnet/cobalt:10
@@ -13,9 +18,29 @@ services:
     ports:
       - "9000:9000"
     environment:
+      # Public URL Cobalt uses to build absolute stream links for clients
       API_URL: "https://corners-editors-seeker-airplane.trycloudflare.com/"
+      # Must match the key your backend uses below
       API_KEY: "my_home_secret_key_123"
       WEB_ENABLE: "true"
+      # Disable all proxy settings in Cobalt's yt-dlp instance
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+    # Mount cookies if YouTube blocks your server's IP for search too
+    volumes:
+      - ./cookies.txt:/cookies.txt:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   music-backend:
     build: .
@@ -23,15 +48,23 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - redis
-      - cobalt-api
+      redis:
+        condition: service_healthy
+      cobalt-api:
+        condition: service_healthy
     environment:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
-      # Replace with your actual Cobalt API key above
+      # Backend talks to Cobalt over the internal docker network
       COBALT_API_URL: "http://cobalt-api:9000/"
-      COBALT_API_KEY: "YOUR_CUSTOM_SECRET_API_KEY"
-      # Strip any inherited proxy env vars so yt-dlp connects direct
+      # Disable all proxy settings to avoid "Tunnel connection failed" errors
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
       NO_PROXY: "*"
+      no_proxy: "*"
+      # Same key Cobalt was started with above
+      COBALT_API_KEY: "my_home_secret_key_123"
