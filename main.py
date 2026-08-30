@@ -82,7 +82,8 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url:{video_id}"
+    # Updated key version to bypass stale localhost cached URLs
+    cache_key = f"stream_url_v2:{video_id}"
 
     # Check Redis cache
     try:
