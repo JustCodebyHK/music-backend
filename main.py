@@ -2,7 +2,7 @@ import os
 import requests
 import redis
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -40,7 +40,7 @@ def fetch_audio_from_cobalt(video_id: str) -> str:
         "Accept": "application/json",
         "Content-Type": "application/json",
         "Authorization": f"Bearer {COBALT_API_KEY}",
-        "bypass-tunnel-reminder": "true"  # Bypasses localtunnel landing page
+        "bypass-tunnel-reminder": "true"  # Bypasses localtunnel landing page if used
     }
 
     try:
@@ -111,15 +111,11 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
+    """Redirect client directly to the extracted Cobalt audio stream URL."""
     stream_data = get_stream_url(video_id)
-    stream_url = stream_data["stream_url"]
+    stream_url = stream_data.get("stream_url")
 
-    try:
-        req = requests.get(stream_url, stream=True, timeout=15)
-        return StreamingResponse(
-            req.iter_content(chunk_size=1024 * 64),
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": f"attachment; filename={video_id}.mp3"}
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to stream download payload: {str(e)}")
+    if not stream_url:
+        raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
+
+    return RedirectResponse(url=stream_url)
