@@ -1,9 +1,11 @@
 import os
+import subprocess
 import redis
 import requests
-from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Personal Music Service")
 ytm = YTMusic()
@@ -23,34 +25,8 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-COBALT_API_URL = os.getenv("COBALT_API_URL", "http://YOUR_SERVER_IP:9000/")
-COBALT_API_KEY = os.getenv("COBALT_API_KEY", "YOUR_CUSTOM_SECRET_API_KEY")
-
-
-def fetch_audio_from_cobalt(video_id: str) -> str:
-    """Query self-hosted Cobalt instance for an MP3 audio stream URL."""
-    payload = {
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "downloadMode": "audio",
-        "audioFormat": "mp3"
-    }
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {COBALT_API_KEY}"
-    }
-
-    try:
-        res = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            if "url" in data:
-                return data["url"]
-            elif data.get("status") == "redirect":
-                return data.get("url")
-        raise HTTPException(status_code=res.status_code, detail=f"Cobalt error: {res.text}")
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach private Cobalt node: {str(e)}")
+# Cloudflare Tunnel base URL (e.g., https://corners-editors-seeker-airplane.trycloudflare.com/)
+TUNNEL_URL = os.getenv("COBALT_API_URL", "").rstrip("/")
 
 
 @app.get("/")
@@ -79,7 +55,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v8:{video_id}"
+    cache_key = f"stream_url_v9:{video_id}"
 
     try:
         cached_url = redis_client.get(cache_key)
@@ -88,7 +64,29 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    stream_url = fetch_audio_from_cobalt(video_id)
+    # Extract audio stream using yt-dlp
+    cmd = [
+        "yt-dlp",
+        "-g",
+        "-f", "ba[ext=m4a]/ba",
+        f"https://www.youtube.com/watch?v={video_id}"
+    ]
+    
+    # Route request through Cloudflare Tunnel proxy if configured
+    if TUNNEL_URL:
+        cmd.extend(["--proxy", TUNNEL_URL])
+
+    try:
+        stream_url = subprocess.check_output(cmd, stderr=subprocess.PIPE).decode('utf-8').strip()
+        if not stream_url:
+            raise Exception("yt-dlp returned an empty stream URL")
+    except subprocess.CalledProcessError as e:
+        # Fallback without proxy if tunnel proxy refuses socket forwarding
+        try:
+            cmd_direct = ["yt-dlp", "-g", "-f", "ba[ext=m4a]/ba", f"https://www.youtube.com/watch?v={video_id}"]
+            stream_url = subprocess.check_output(cmd_direct, stderr=subprocess.PIPE).decode('utf-8').strip()
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"Extraction failed: {e.stderr.decode('utf-8')}")
 
     try:
         redis_client.setex(cache_key, 10800, stream_url)
@@ -104,7 +102,7 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Proxy stream using direct chunk iteration."""
+    """Stream raw audio stream directly to client via chunk generator."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
@@ -112,35 +110,26 @@ def download_audio(video_id: str):
         raise HTTPException(status_code=404, detail="Stream URL resolution failed.")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
 
     try:
-        # Stream directly in chunks to prevent memory overhead and 0-byte drops
-        with requests.get(stream_url, headers=headers, stream=True, timeout=45) as res:
-            if res.status_code != 200:
-                raise HTTPException(
-                    status_code=res.status_code, 
-                    detail=f"Tunnel rejected request. Status: {res.status_code}"
-                )
+        req = requests.get(stream_url, headers=headers, stream=True, timeout=30)
+        
+        if req.status_code != 200:
+            raise HTTPException(status_code=req.status_code, detail="Direct stream payload failed.")
 
-            # Read stream chunks into bytearray
-            audio_data = bytearray()
-            for chunk in res.iter_content(chunk_size=64 * 1024):
+        def iterfile():
+            for chunk in req.iter_content(chunk_size=1024 * 64):
                 if chunk:
-                    audio_data.extend(chunk)
+                    yield chunk
 
-            if len(audio_data) == 0:
-                raise HTTPException(status_code=500, detail="Cobalt returned an empty payload (0 bytes). Check local Docker logs.")
-
-            return Response(
-                content=bytes(audio_data),
-                media_type="audio/mpeg",
-                headers={
-                    "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
-                    "Content-Length": str(len(audio_data))
-                }
-            )
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch audio stream: {str(e)}")
+        return StreamingResponse(
+            iterfile(),
+            media_type="audio/mp4",
+            headers={
+                "Content-Disposition": f'attachment; filename="{video_id}.m4a"'
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")

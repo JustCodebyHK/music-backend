@@ -3,4 +3,4 @@ uvicorn
 requests
 redis
 ytmusicapi
-httpx
+yt-dlp
