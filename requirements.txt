@@ -3,5 +3,3 @@ uvicorn
 requests
 ytmusicapi
 redis
-yt-dlp
-yt-dlp-youtube-oauth2

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  cobalt-api:
+    image: ghcr.io/imputnet/cobalt:10
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      # Set your internal/public API URL
+      API_URL: "http://YOUR_SERVER_IP:9000/"
+      # Require an API key so unauthorized users cannot abuse your instance
+      API_KEY: "YOUR_CUSTOM_SECRET_API_KEY"
+      # Require cookie/session validation settings if needed
+      WEB_ENABLE: "true"
