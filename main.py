@@ -1,6 +1,7 @@
 import os
 import requests
 import redis
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
@@ -82,7 +83,8 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v3:{video_id}"
+    # Bumped key version to stream_url_v5 to bypass any cached response
+    cache_key = f"stream_url_v5:{video_id}"
 
     # Check Redis cache
     try:
@@ -109,47 +111,46 @@ def get_stream_url(video_id: str):
 
 
 @app.get("/api/download/{video_id}")
-def download_audio(video_id: str):
-    """Fetch binary stream payload directly into memory and stream back as MP3."""
+async def download_audio(video_id: str):
+    """Asynchronously stream binary audio payload to avoid 0 KB buffer drops."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
     if not stream_url:
         raise HTTPException(status_code=404, detail="Stream URL not found")
 
-    stream_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Encoding": "identity",
-        "Connection": "keep-alive"
-    }
-
+    client = httpx.AsyncClient(follow_redirects=True, timeout=60.0)
+    
     try:
-        # Fetch stream from local Cobalt via Cloudflare Tunnel
-        r = requests.get(stream_url, headers=stream_headers, stream=True, timeout=60)
+        req = client.build_request("GET", stream_url)
+        r = await client.send(req, stream=True)
         
         if r.status_code != 200:
-            raise HTTPException(status_code=r.status_code, detail=f"Cobalt stream payload failed with status: {r.status_code}")
+            await r.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=r.status_code, detail="Cobalt stream payload failed.")
 
-        def generate_bytes():
-            for chunk in r.iter_content(chunk_size=128 * 1024):
-                if chunk:
+        async def file_sender():
+            try:
+                async for chunk in r.aiter_bytes(chunk_size=65536):
                     yield chunk
+            finally:
+                await r.aclose()
+                await client.aclose()
 
         headers = {
             "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
-            "Content-Type": "audio/mpeg"
+            "Access-Control-Expose-Headers": "Content-Disposition"
         }
         
-        # Include Content-Length header if available from Cloudflare
-        content_length = r.headers.get("Content-Length")
-        if content_length:
-            headers["Content-Length"] = content_length
+        if "content-length" in r.headers:
+            headers["Content-Length"] = r.headers["content-length"]
 
         return StreamingResponse(
-            generate_bytes(),
+            file_sender(),
             media_type="audio/mpeg",
             headers=headers
         )
     except Exception as e:
+        await client.aclose()
         raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
