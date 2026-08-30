@@ -28,13 +28,11 @@ COBALT_API_KEY = os.getenv("COBALT_API_KEY", "YOUR_CUSTOM_SECRET_API_KEY")
 
 
 def fetch_audio_from_cobalt(video_id: str) -> str:
-    """Query self-hosted Cobalt instance for an audio stream URL."""
+    """Query self-hosted Cobalt instance for an MP3 audio stream URL."""
     payload = {
         "url": f"https://www.youtube.com/watch?v={video_id}",
-        "videoQuality": "720",
         "downloadMode": "audio",
-        "audioFormat": "mp3",
-        "youtubeVideoCodec": "h264"
+        "audioFormat": "mp3"
     }
     headers = {
         "Accept": "application/json",
@@ -81,7 +79,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v7:{video_id}"
+    cache_key = f"stream_url_v8:{video_id}"
 
     try:
         cached_url = redis_client.get(cache_key)
@@ -106,7 +104,7 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Proxy audio payload with browser headers to prevent empty 0-byte streams."""
+    """Proxy stream using direct chunk iteration."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
@@ -115,33 +113,34 @@ def download_audio(video_id: str):
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
+        "Accept": "*/*"
     }
 
     try:
-        session = requests.Session()
-        res = session.get(stream_url, headers=headers, allow_redirects=True, timeout=45)
-        
-        if res.status_code != 200:
-            raise HTTPException(
-                status_code=res.status_code, 
-                detail=f"Tunnel rejected stream request. Status: {res.status_code}, Text: {res.text[:300]}"
+        # Stream directly in chunks to prevent memory overhead and 0-byte drops
+        with requests.get(stream_url, headers=headers, stream=True, timeout=45) as res:
+            if res.status_code != 200:
+                raise HTTPException(
+                    status_code=res.status_code, 
+                    detail=f"Tunnel rejected request. Status: {res.status_code}"
+                )
+
+            # Read stream chunks into bytearray
+            audio_data = bytearray()
+            for chunk in res.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    audio_data.extend(chunk)
+
+            if len(audio_data) == 0:
+                raise HTTPException(status_code=500, detail="Cobalt returned an empty payload (0 bytes). Check local Docker logs.")
+
+            return Response(
+                content=bytes(audio_data),
+                media_type="audio/mpeg",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
+                    "Content-Length": str(len(audio_data))
+                }
             )
-
-        if len(res.content) == 0:
-            raise HTTPException(status_code=500, detail="Cobalt returned an empty payload (0 bytes).")
-
-        return Response(
-            content=res.content,
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
-                "Content-Length": str(len(res.content))
-            }
-        )
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch audio stream: {str(e)}")
