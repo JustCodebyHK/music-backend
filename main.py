@@ -1,7 +1,6 @@
 import os
-import subprocess
-import redis
 import requests
+import redis
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
@@ -25,8 +24,36 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-# Cloudflare Tunnel base URL (e.g., https://corners-editors-seeker-airplane.trycloudflare.com/)
-TUNNEL_URL = os.getenv("COBALT_API_URL", "").rstrip("/")
+COBALT_API_URL = os.getenv("COBALT_API_URL", "").rstrip("/")
+COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
+
+
+def fetch_audio_from_cobalt(video_id: str) -> str:
+    """Query local Cobalt instance via Cloudflare Tunnel for raw audio stream."""
+    payload = {
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "downloadMode": "audio",
+        "audioFormat": "mp3"
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {COBALT_API_KEY}"
+    }
+
+    try:
+        res = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=20)
+        if res.status_code == 200:
+            data = res.json()
+            if "url" in data:
+                return data["url"]
+            elif data.get("status") == "redirect":
+                return data.get("url")
+            elif data.get("status") == "picker" and "picker" in data:
+                return data["picker"][0]["url"]
+        raise HTTPException(status_code=res.status_code, detail=f"Cobalt error: {res.text}")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to reach private Cobalt node: {str(e)}")
 
 
 @app.get("/")
@@ -55,7 +82,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v9:{video_id}"
+    cache_key = f"stream_url_v10:{video_id}"
 
     try:
         cached_url = redis_client.get(cache_key)
@@ -64,29 +91,7 @@ def get_stream_url(video_id: str):
     except redis.RedisError:
         pass
 
-    # Extract audio stream using yt-dlp
-    cmd = [
-        "yt-dlp",
-        "-g",
-        "-f", "ba[ext=m4a]/ba",
-        f"https://www.youtube.com/watch?v={video_id}"
-    ]
-    
-    # Route request through Cloudflare Tunnel proxy if configured
-    if TUNNEL_URL:
-        cmd.extend(["--proxy", TUNNEL_URL])
-
-    try:
-        stream_url = subprocess.check_output(cmd, stderr=subprocess.PIPE).decode('utf-8').strip()
-        if not stream_url:
-            raise Exception("yt-dlp returned an empty stream URL")
-    except subprocess.CalledProcessError as e:
-        # Fallback without proxy if tunnel proxy refuses socket forwarding
-        try:
-            cmd_direct = ["yt-dlp", "-g", "-f", "ba[ext=m4a]/ba", f"https://www.youtube.com/watch?v={video_id}"]
-            stream_url = subprocess.check_output(cmd_direct, stderr=subprocess.PIPE).decode('utf-8').strip()
-        except Exception:
-            raise HTTPException(status_code=500, detail=f"Extraction failed: {e.stderr.decode('utf-8')}")
+    stream_url = fetch_audio_from_cobalt(video_id)
 
     try:
         redis_client.setex(cache_key, 10800, stream_url)
@@ -102,7 +107,7 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Stream raw audio stream directly to client via chunk generator."""
+    """Stream audio chunks directly to client."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
@@ -114,21 +119,18 @@ def download_audio(video_id: str):
     }
 
     try:
-        req = requests.get(stream_url, headers=headers, stream=True, timeout=30)
+        r = requests.get(stream_url, headers=headers, stream=True, timeout=30)
         
-        if req.status_code != 200:
-            raise HTTPException(status_code=req.status_code, detail="Direct stream payload failed.")
-
         def iterfile():
-            for chunk in req.iter_content(chunk_size=1024 * 64):
+            for chunk in r.iter_content(chunk_size=1024 * 64):
                 if chunk:
                     yield chunk
 
         return StreamingResponse(
             iterfile(),
-            media_type="audio/mp4",
+            media_type="audio/mpeg",
             headers={
-                "Content-Disposition": f'attachment; filename="{video_id}.m4a"'
+                "Content-Disposition": f'attachment; filename="{video_id}.mp3"'
             }
         )
     except Exception as e:
