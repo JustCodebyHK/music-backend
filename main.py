@@ -2,7 +2,7 @@ import os
 import requests
 import redis
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -82,7 +82,7 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    cache_key = f"stream_url_v10:{video_id}"
+    cache_key = f"stream_url_v11:{video_id}"
 
     try:
         cached_url = redis_client.get(cache_key)
@@ -107,31 +107,11 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Stream audio chunks directly to client."""
+    """Redirect client browser directly to Cobalt stream URL to avoid proxy corruption."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
     if not stream_url:
         raise HTTPException(status_code=404, detail="Stream URL resolution failed.")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-
-    try:
-        r = requests.get(stream_url, headers=headers, stream=True, timeout=30)
-        
-        def iterfile():
-            for chunk in r.iter_content(chunk_size=1024 * 64):
-                if chunk:
-                    yield chunk
-
-        return StreamingResponse(
-            iterfile(),
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": f'attachment; filename="{video_id}.mp3"'
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
+    return RedirectResponse(url=stream_url, status_code=307)
