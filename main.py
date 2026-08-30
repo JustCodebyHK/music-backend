@@ -2,7 +2,7 @@ import os
 import requests
 import redis
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from ytmusicapi import YTMusic
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -40,11 +40,11 @@ def fetch_audio_from_cobalt(video_id: str) -> str:
         "Accept": "application/json",
         "Content-Type": "application/json",
         "Authorization": f"Bearer {COBALT_API_KEY}",
-        "bypass-tunnel-reminder": "true"  # Bypasses localtunnel landing page if used
+        "bypass-tunnel-reminder": "true"
     }
 
     try:
-        res = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=12)
+        res = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
             data = res.json()
             if "url" in data:
@@ -82,7 +82,6 @@ def search_music(q: str = Query(..., description="Search query")):
 
 @app.get("/api/stream_url/{video_id}")
 def get_stream_url(video_id: str):
-    # Updated key version to bypass stale localhost cached URLs
     cache_key = f"stream_url_v2:{video_id}"
 
     # Check Redis cache
@@ -111,11 +110,38 @@ def get_stream_url(video_id: str):
 
 @app.get("/api/download/{video_id}")
 def download_audio(video_id: str):
-    """Redirect client directly to the extracted Cobalt audio stream URL."""
+    """Stream binary audio payload through FastAPI to avoid 0 KB tunnel drops."""
     stream_data = get_stream_url(video_id)
     stream_url = stream_data.get("stream_url")
 
     if not stream_url:
-        raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
+        raise HTTPException(status_code=404, detail="Stream URL not found")
 
-    return RedirectResponse(url=stream_url)
+    req_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "bypass-tunnel-reminder": "true"
+    }
+
+    try:
+        # Request stream payload from Cobalt
+        r = requests.get(stream_url, headers=req_headers, stream=True, timeout=30)
+        
+        if r.status_code != 200:
+            raise HTTPException(status_code=r.status_code, detail="Unable to retrieve audio stream payload.")
+
+        def iterfile():
+            for chunk in r.iter_content(chunk_size=1024 * 32):
+                if chunk:
+                    yield chunk
+
+        # Content-Type application/octet-stream forces browser to write binary bytes cleanly
+        return StreamingResponse(
+            iterfile(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{video_id}.mp3"',
+                "Content-Length": r.headers.get("Content-Length", "")
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Streaming error: {str(e)}")
