@@ -28,13 +28,6 @@ requests_session = requests.Session()
 requests_session.proxies = {"http": "", "https": ""}
 requests_session.trust_env = False  # Do NOT trust environment proxy settings
 
-# Force yt-dlp (used internally by ytmusicapi) to bypass any broken system proxy.
-# "proxy": "" makes requests go direct instead of through HTTP_PROXY/HTTPS_PROXY.
-yt_dlp_options = {
-    "proxy": "",
-    "socket_timeout": 30,
-    "source_address": "0.0.0.0",  # Bind to local interface, avoid proxy
-}
 ytm = YTMusic(
     requests_session=requests_session,
     proxies={"http": "", "https": ""}  # Force no proxy

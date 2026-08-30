@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
@@ -13,7 +11,9 @@ services:
       retries: 5
 
   cobalt-api:
-    image: ghcr.io/imputnet/cobalt:10
+    # Keep this aligned with Cobalt's current supported container release.
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -23,15 +23,6 @@ services:
       # Must match the key your backend uses below
       API_KEY: "my_home_secret_key_123"
       WEB_ENABLE: "true"
-      # Disable all proxy settings in Cobalt's yt-dlp instance
-      HTTP_PROXY: ""
-      HTTPS_PROXY: ""
-      ALL_PROXY: ""
-      http_proxy: ""
-      https_proxy: ""
-      all_proxy: ""
-      NO_PROXY: "*"
-      no_proxy: "*"
     # Mount cookies if YouTube blocks your server's IP for search too
     volumes:
       - ./cookies.txt:/cookies.txt:ro
@@ -57,14 +48,5 @@ services:
       REDIS_PORT: "6379"
       # Backend talks to Cobalt over the internal docker network
       COBALT_API_URL: "http://cobalt-api:9000/"
-      # Disable all proxy settings to avoid "Tunnel connection failed" errors
-      HTTP_PROXY: ""
-      HTTPS_PROXY: ""
-      ALL_PROXY: ""
-      http_proxy: ""
-      https_proxy: ""
-      all_proxy: ""
-      NO_PROXY: "*"
-      no_proxy: "*"
       # Same key Cobalt was started with above
       COBALT_API_KEY: "my_home_secret_key_123"
